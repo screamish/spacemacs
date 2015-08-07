@@ -127,7 +127,7 @@
   (let* ((input 'testpkg)
          (expected (cfgl-package "testpkg"
                                  :name 'testpkg
-                                 :location 'melpa
+                                 :location 'elpa
                                  :step nil))
          (result (configuration-layer/make-package input)))
     (should (equal result expected))))
@@ -145,7 +145,7 @@
 ;; configuration-layer/get-packages
 ;; ---------------------------------------------------------------------------
 
-(ert-deftest test-get-packages--symbols ()
+(ert-deftest test-get-packages--symbols-only ()
   (let* ((layer1 (cfgl-layer "testlayer1" :name 'testlayer1 :dir "/path"))
          (layers (list layer1))
          (testlayer1-packages '(pkg1 pkg2 pkg3))
@@ -156,15 +156,15 @@
     (mocker-let ((file-exists-p (f) ((:output t :occur 1)
                                      (:output nil :occur 1)))
                  (configuration-layer/layer-usedp (l) ((:output t :occur 1))))
-                (should (equal '([object cfgl-package "pkg3" pkg3 melpa nil]
-                                 [object cfgl-package "pkg2" pkg2 melpa nil]
-                                 [object cfgl-package "pkg1" pkg1 melpa nil])
+                (should (equal '([object cfgl-package "pkg3" pkg3 testlayer1 nil nil elpa nil]
+                                 [object cfgl-package "pkg2" pkg2 testlayer1 nil nil elpa nil]
+                                 [object cfgl-package "pkg1" pkg1 testlayer1 nil nil elpa nil])
                                (configuration-layer/get-packages layers))))))
 
-(ert-deftest test-get-packages--lists ()
+(ert-deftest test-get-packages--lists-only ()
   (let* ((layer1 (cfgl-layer "testlayer1" :name 'testlayer1 :dir "/path"))
          (layers (list layer1))
-         (testlayer1-packages '((pkg1 :location melpa)
+         (testlayer1-packages '((pkg1 :location elpa)
                                 (pkg2 :location recipe)
                                 (pkg3 :location local :step pre)))
          (mocker-mock-default-record-cls 'mocker-stub-record))
@@ -174,9 +174,9 @@
     (mocker-let ((file-exists-p (f) ((:output t :occur 1)
                                      (:output nil :occur 1)))
                  (configuration-layer/layer-usedp (l) ((:output t :occur 1))))
-                (should (equal '([object cfgl-package "pkg3" pkg3 local pre]
-                                 [object cfgl-package "pkg2" pkg2 recipe nil]
-                                 [object cfgl-package "pkg1" pkg1 melpa nil])
+                (should (equal '([object cfgl-package "pkg3" pkg3 testlayer1 nil nil local pre]
+                                 [object cfgl-package "pkg2" pkg2 testlayer1 nil nil recipe nil]
+                                 [object cfgl-package "pkg1" pkg1 testlayer1 nil nil elpa nil])
                                (configuration-layer/get-packages layers))))))
 
 (ert-deftest test-get-packages--symbols-and-lists ()
@@ -194,13 +194,13 @@
     (mocker-let ((file-exists-p (f) ((:output t :occur 1)
                                      (:output nil :occur 1)))
                  (configuration-layer/layer-usedp (l) ((:output t :occur 1))))
-                (should (equal '([object cfgl-package "pkg4" pkg4 melpa nil]
-                                 [object cfgl-package "pkg3" pkg3 local pre]
-                                 [object cfgl-package "pkg2" pkg2 recipe nil]
-                                 [object cfgl-package "pkg1" pkg1 melpa nil])
+                (should (equal '([object cfgl-package "pkg4" pkg4 testlayer1 nil nil elpa nil]
+                                 [object cfgl-package "pkg3" pkg3 testlayer1 nil nil local pre]
+                                 [object cfgl-package "pkg2" pkg2 testlayer1 nil nil recipe nil]
+                                 [object cfgl-package "pkg1" pkg1 testlayer1 nil nil elpa nil])
                                (configuration-layer/get-packages layers))))))
 
-(ert-deftest test-get-packages--pkg2-ignored-because-no-init-function ()
+(ert-deftest test-get-packages--pkg2-has-no-owner-because-no-init-function ()
   (let* ((layer2 (cfgl-layer "testlayer2" :name 'testlayer2 :dir "/path"))
          (layers (list layer2))
          (testlayer2-packages '(pkg1 pkg2 pkg3))
@@ -210,9 +210,78 @@
     (mocker-let ((file-exists-p (f) ((:output t :occur 1)
                                      (:output nil :occur 1)))
                  (configuration-layer/layer-usedp (l) ((:output t :occur 1))))
-                ;; pkg2 is missing since there is no init function
-                (should (equal '([object cfgl-package "pkg3" pkg3 melpa nil]
-                                 [object cfgl-package "pkg1" pkg1 melpa nil])
+                (should (equal '([object cfgl-package "pkg3" pkg3 testlayer2 nil nil elpa nil]
+                                 [object cfgl-package "pkg2" pkg2 nil nil nil elpa nil]
+                                 [object cfgl-package "pkg1" pkg1 testlayer2 nil nil elpa nil])
+                               (configuration-layer/get-packages layers))))))
+
+(ert-deftest test-get-packages--pre-init-function ()
+  (let* ((layer3 (cfgl-layer "testlayer3" :name 'testlayer3 :dir "/path"))
+         (layer4 (cfgl-layer "testlayer4" :name 'testlayer4 :dir "/path"))
+         (layers (list layer3 layer4))
+         (testlayer3-packages '(pkg1))
+         (testlayer4-packages '(pkg1))
+         (mocker-mock-default-record-cls 'mocker-stub-record))
+    (defun testlayer3/init-pkg1 nil)
+    (defun testlayer4/pre-init-pkg1 nil)
+    (mocker-let ((file-exists-p (f) ((:output t :occur 1)
+                                     (:output nil :occur 1)
+                                     (:output t :occur 1)
+                                     (:output nil :occur 1)))
+                 (configuration-layer/layer-usedp (l) ((:output t :occur 2))))
+                (should (equal '([object cfgl-package "pkg1" pkg1 testlayer3 (testlayer4) nil elpa nil])
+                               (configuration-layer/get-packages layers))))))
+
+(ert-deftest test-get-packages--post-init-function ()
+  (let* ((layer3 (cfgl-layer "testlayer3" :name 'testlayer3 :dir "/path"))
+         (layer5 (cfgl-layer "testlayer5" :name 'testlayer5 :dir "/path"))
+         (layers (list layer3 layer5))
+         (testlayer3-packages '(pkg1))
+         (testlayer5-packages '(pkg1))
+         (mocker-mock-default-record-cls 'mocker-stub-record))
+    (defun testlayer3/init-pkg1 nil)
+    (defun testlayer5/post-init-pkg1 nil)
+    (mocker-let ((file-exists-p (f) ((:output t :occur 1)
+                                     (:output nil :occur 1)
+                                     (:output t :occur 1)
+                                     (:output nil :occur 1)))
+                 (configuration-layer/layer-usedp (l) ((:output t :occur 2))))
+                (should (equal '([object cfgl-package "pkg1" pkg1 testlayer3 nil (testlayer5) elpa nil])
+                               (configuration-layer/get-packages layers))))))
+
+(ert-deftest test-get-packages--pre-and-post-init-functions ()
+  (let* ((layer3 (cfgl-layer "testlayer3" :name 'testlayer3 :dir "/path"))
+         (layer6 (cfgl-layer "testlayer6" :name 'testlayer6 :dir "/path"))
+         (layers (list layer3 layer6))
+         (testlayer3-packages '(pkg1))
+         (testlayer6-packages '(pkg1))
+         (mocker-mock-default-record-cls 'mocker-stub-record))
+    (defun testlayer3/init-pkg1 nil)
+    (defun testlayer6/pre-init-pkg1 nil)
+    (defun testlayer6/post-init-pkg1 nil)
+    (mocker-let ((file-exists-p (f) ((:output t :occur 1)
+                                     (:output nil :occur 1)
+                                     (:output t :occur 1)
+                                     (:output nil :occur 1)))
+                 (configuration-layer/layer-usedp (l) ((:output t :occur 2))))
+                (should (equal '([object cfgl-package "pkg1" pkg1 testlayer3 (testlayer6) (testlayer6) elpa nil])
+                               (configuration-layer/get-packages layers))))))
+
+(ert-deftest test-get-packages--several-init-functions-last-one-is-the-owner ()
+  (let* ((layer7 (cfgl-layer "testlayer7" :name 'testlayer7 :dir "/path"))
+         (layer8 (cfgl-layer "testlayer8" :name 'testlayer8 :dir "/path"))
+         (layers (list layer7 layer8))
+         (testlayer7-packages '(pkg1))
+         (testlayer8-packages '(pkg1))
+         (mocker-mock-default-record-cls 'mocker-stub-record))
+    (defun testlayer7/init-pkg1 nil)
+    (defun testlayer8/init-pkg1 nil)
+    (mocker-let ((file-exists-p (f) ((:output t :occur 1)
+                                     (:output nil :occur 1)
+                                     (:output t :occur 1)
+                                     (:output nil :occur 1)))
+                 (configuration-layer/layer-usedp (l) ((:output t :occur 2))))
+                (should (equal '([object cfgl-package "pkg1" pkg1 testlayer8 nil nil elpa nil])
                                (configuration-layer/get-packages layers))))))
 
 (ert-deftest test-get-packages--pre-extensions-backward-compatibility ()
@@ -227,10 +296,10 @@
     (defun testlayer1/init-ext3 nil)
     (mocker-let ((file-exists-p (f) ((:output t :occur 2)))
                  (configuration-layer/layer-usedp (l) ((:output t :occur 2))))
-                (should (equal '([object cfgl-package "ext3" ext3 local pre]
-                                 [object cfgl-package "ext2" ext2 local pre]
-                                 [object cfgl-package "ext1" ext1 local pre]
-                                 [object cfgl-package "pkg1" pkg1 melpa nil])
+                (should (equal '([object cfgl-package "ext3" ext3 testlayer1 nil nil local pre]
+                                 [object cfgl-package "ext2" ext2 testlayer1 nil nil local pre]
+                                 [object cfgl-package "ext1" ext1 testlayer1 nil nil local pre]
+                                 [object cfgl-package "pkg1" pkg1 testlayer1 nil nil elpa nil])
                                (configuration-layer/get-packages layers))))))
 
 (ert-deftest test-get-packages--post-extensions-backward-compatibility ()
@@ -245,10 +314,10 @@
     (defun testlayer1/init-ext3 nil)
     (mocker-let ((file-exists-p (f) ((:output t :occur 2)))
                  (configuration-layer/layer-usedp (l) ((:output t :occur 2))))
-                (should (equal '([object cfgl-package "ext3" ext3 local post]
-                                 [object cfgl-package "ext2" ext2 local post]
-                                 [object cfgl-package "ext1" ext1 local post]
-                                 [object cfgl-package "pkg1" pkg1 melpa nil])
+                (should (equal '([object cfgl-package "ext3" ext3 testlayer1 nil nil local post]
+                                 [object cfgl-package "ext2" ext2 testlayer1 nil nil local post]
+                                 [object cfgl-package "ext1" ext1 testlayer1 nil nil local post]
+                                 [object cfgl-package "pkg1" pkg1 testlayer1 nil nil elpa nil])
                                (configuration-layer/get-packages layers))))))
 
 (ert-deftest test-get-packages--extensions-backward-compatibility ()
@@ -267,13 +336,13 @@
     (defun testlayer1/init-ext6 nil)
     (mocker-let ((file-exists-p (f) ((:output t :occur 2)))
                  (configuration-layer/layer-usedp (l) ((:output t :occur 2))))
-                (should (equal '([object cfgl-package "ext6" ext6 local post]
-                                 [object cfgl-package "ext5" ext5 local post]
-                                 [object cfgl-package "ext4" ext4 local post]
-                                 [object cfgl-package "ext3" ext3 local pre]
-                                 [object cfgl-package "ext2" ext2 local pre]
-                                 [object cfgl-package "ext1" ext1 local pre]
-                                 [object cfgl-package "pkg1" pkg1 melpa nil])
+                (should (equal '([object cfgl-package "ext6" ext6 testlayer1 nil nil local post]
+                                 [object cfgl-package "ext5" ext5 testlayer1 nil nil local post]
+                                 [object cfgl-package "ext4" ext4 testlayer1 nil nil local post]
+                                 [object cfgl-package "ext3" ext3 testlayer1 nil nil local pre]
+                                 [object cfgl-package "ext2" ext2 testlayer1 nil nil local pre]
+                                 [object cfgl-package "ext1" ext1 testlayer1 nil nil local pre]
+                                 [object cfgl-package "pkg1" pkg1 testlayer1 nil nil elpa nil])
                                (configuration-layer/get-packages layers))))))
 
 ;; ---------------------------------------------------------------------------

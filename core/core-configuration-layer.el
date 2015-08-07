@@ -87,9 +87,21 @@
   ((name :initarg :name
          :type symbol
          :documentation "Name of the package.")
+   (owner :initarg :owner
+          :initform nil
+          :type symbol
+          :documentation "The layer defining the init function.")
+   (pre-layers :initarg :pre-layers
+               :initform '()
+               :type list
+               :documentation "Layers with a pre-init function.")
+   (post-layers :initarg :post-layers
+               :initform '()
+               :type list
+               :documentation "Layers with a post-init function.")
    (location :initarg :location
-             :initform melpa
-             :type (satisfies (lambda (x) (member x '(local recipe melpa melpa-stable gnu-elpa org-elpa))))
+             :initform elpa
+             :type (satisfies (lambda (x) (member x '(local elpa recipe))))
              :documentation "Location of the package.")
    (step :initarg :step
          :initform nil
@@ -236,14 +248,34 @@ layer directory."
           ;; for instance for helm-spacemacs
           (unless (configuration-layer/layer-usedp name)
             (load packages-file))
-          (mapc (lambda (pkg)
-                  (let ((pkgname (if (listp pkg) (car pkg) pkg)))
-                    (when (fboundp (intern (format "%S/init-%S"
+          ;; TODO find a way to remove this insecure eval
+          (dolist (pkg (eval (intern (format "%S-packages" name))))
+            (let* ((pkgname (if (listp pkg) (car pkg) pkg))
+                   (init-func (intern (format "%S/init-%S"
+                                              name pkgname)))
+                   (pre-init-func (intern (format "%S/pre-init-%S"
+                                                  name pkgname)))
+                   (post-init-func (intern (format "%S/post-init-%S"
                                                    name pkgname)))
-                      (push (configuration-layer/make-package pkg) result))))
-                ;; TODO find a way to remove this insecure eval
-                (eval (intern (format "%S-packages" name)))))
-        ;; extensions
+                   (obj (object-assoc pkg :name result)))
+              (unless obj
+                (setq obj (configuration-layer/make-package pkg))
+                (push obj result))
+              (when (fboundp init-func)
+                ;; last owner wins over the previous one,
+                ;; still warn about mutliple owners
+                (when (oref obj :owner)
+                  (spacemacs-buffer/warning
+                   (format (concat "More than one init function found for "
+                                   "package %S. Previous owner was %S, "
+                                   "replacing it with layer %S.")
+                           pkg (oref obj :owner) name)))
+                (oset obj :owner name))
+              (when (fboundp pre-init-func)
+                (push name (oref obj :pre-layers)))
+              (when (fboundp post-init-func)
+                (push name (oref obj :post-layers))))))
+        ;; extensions (dummy duplication of the code above)
         ;; TODO remove extensions in 0.105.0
         (when (file-exists-p extensions-file)
           ;; required for lazy-loading of unused layers
@@ -253,16 +285,38 @@ layer directory."
           (dolist (step '(pre post))
             (let ((var (intern (format "%S-%S-extensions" name step))))
               (when (boundp var)
-                (mapc (lambda (pkg)
-                        (let ((pkgname (if (listp pkg) (car pkg) pkg)))
-                          (when (fboundp (intern (format "%S/init-%S"
-                                                         name pkgname)))
-                            (let ((obj (configuration-layer/make-package pkg)))
-                              (oset obj :location 'local)
-                              (oset obj :step step)
-                              (push obj result)))))
-                      ;; TODO find a way to remove this insecure eval
-                      (eval var))))))))
+                (dolist (pkg (eval var))
+                  (let ((pkgname (if (listp pkg) (car pkg) pkg)))
+                    (when (fboundp (intern (format "%S/init-%S"
+                                                   name pkgname)))
+                      (let ((obj (configuration-layer/make-package pkg))
+                            (init-func (intern (format "%S/init-%S"
+                                                       name pkgname)))
+                            (pre-init-func (intern (format "%S/pre-init-%S"
+                                                           name pkgname)))
+                            (post-init-func (intern (format "%S/post-init-%S"
+                                                            name pkgname)))
+                            (obj (object-assoc pkg :name result)))
+                        (unless obj
+                          (setq obj (configuration-layer/make-package pkg))
+                          (push obj result))
+                        (when (fboundp init-func)
+                          ;; last owner wins over the previous one,
+                          ;; still warn about mutliple owners
+                          (when (oref obj :owner)
+                            (spacemacs-buffer/warning
+                             (format (concat
+                                      "More than one init function found for "
+                                      "package %S. Previous owner was %S, "
+                                      "replacing it with layer %S.")
+                                     pkg (oref obj :owner) name)))
+                          (oset obj :owner name))
+                        (when (fboundp pre-init-func)
+                          (push name (oref obj :pre-layers)))
+                        (when (fboundp post-init-func)
+                          (push name (oref obj :post-layers)))
+                        (oset obj :location 'local)
+                        (oset obj :step step)))))))))))
     result))
 
 (defun configuration-layer//get-private-layer-dir (name)
@@ -417,16 +471,18 @@ LAYERS is a list of layer symbols."
             (spacemacs-buffer/warning "Missing value for variable %s !"
                                       var)))))))
 
-(defun configuration-layer/package-usedp (name)
-  "Return non-nil if NAME is the name of a used package."
-  (not (null (object-assoc name :name configuration-layer-used-packages))))
-
 (defun configuration-layer/layer-usedp (name)
   "Return non-nil if NAME is the name of a used layer."
   (not (null (object-assoc name :name configuration-layer-used-layers))))
 
+(defun configuration-layer/package-usedp (name)
+  "Return non-nil if NAME is the name of a used package."
+  (not (null (object-assoc name :name configuration-layer-used-packages))))
+
 (defun configuration-layer/load-layers ()
   "Load all declared layers."
+  ;; FIFO loading instead of LIFO, this allow the user to put her layers at the
+  ;; end of the list to override previous layers.
   (let ((layers (reverse configuration-layer-used-layers)))
     (configuration-layer//set-layers-variables layers)
     ;; first load the config files then the package files
